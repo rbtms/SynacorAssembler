@@ -1,0 +1,29 @@
+
+; test program
+
+.data
+; Check for constant redeclaration
+len       NUM 26
+test      CHR 'a'
+
+.code
+main:
+init:  SET    B, test   ; Initialize B to 'a'
+       OUT   'a'
+       SET    C, len    ; Initialize C to len
+
+; Main loop
+loop:  ADD    B, B, 1   ; B = B+1
+       ADD    C, C, -1  ; Decrease lim by 1
+       JT     C, print  ; If C == 0 jump to print
+       JMP    end       ; Else jump to end
+
+; Print a number
+print: OUT    B         ; Output C
+       JMP    main      ; Return to main
+
+; Halt the program
+end:   HALT
+
+; blah
+
