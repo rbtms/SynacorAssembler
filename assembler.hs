@@ -7,8 +7,8 @@ import qualified Data.ByteString.Lazy as BS
 import qualified Data.Binary.Put as P
 import qualified Data.List.Split as S
 import System.IO
+import Tokenizer
 import Debug.Trace
-
 
 -- |
 -- | Datatypes
@@ -20,22 +20,6 @@ data ConstType = NumType Int | ChrType Char | StrType [Char]
 data Register = A | B | C | D | E | F | G | H
   deriving Show
 
-data Token =
-    T_Section     [Char]
-  | T_Identifier  [Char]
-  | T_Number      Int
-  | T_Chr         Char
-  | T_Register    Char
-  | T_Tag         [Char]
-  | T_Opcode      [Char]
-  | T_Type        [Char]
-  | T_Comma
-  | T_Newline
-  deriving (Eq, Show)
-
-data TokenInfo = TokenInfo { t_line :: Int, t_token :: Token }
-  deriving (Eq, Show)
-
 data Section = Section { s_name :: [Char], s_line :: Int, s_tokens :: [TokenInfo] }
   deriving Show
 
@@ -43,13 +27,8 @@ data Const =
     C_Num { c_name :: [Char], c_num :: Int   }
   deriving (Eq, Show)
 
-data Tag = Tag { _jmp_line :: Int, _name :: [Char] }
+data Tag = Tag { _jmp_ptr :: Int, _name :: [Char] }
   deriving Show
-
--- data Opcode =
---     Halt
---   | Set 
-
 
 -- |
 -- | Types
@@ -64,51 +43,14 @@ type Identifier = [Char]
 _MAX_NUM :: Int
 _MAX_NUM = 32768
 
-_TOKEN_COMMENT :: Char
-_TOKEN_COMMENT = ';'
-
-_TOKEN_TYPES = ["CHR", "NUM"]
-
-_TOKEN_OPCODES :: [String]
-_TOKEN_OPCODES = [ "HALT", "SET", "PUSH", "POP", "EQ", "GT", "JMP", "JT", "JF"
-                 , "ADD", "MULT", "MOD", "AND", "OR", "NOT", "RMEM", "WMEM"
-                 , "CALL", "RET", "OUT", "IN", "NOOP" 
-                 ]
-
-_TOKEN_SECTIONS :: [String]
-_TOKEN_SECTIONS = ["data", "code"]
-
 -- |
 -- | Boolean checking functions
 -- |
-
--- is_opcode, is_identifier, is_chr, is_register :: [Char] -> Bool
--- is_number, is_section, is_tag, is_type        :: [Char] -> Bool
-
--- | Tokens
-
-is_opcode     str = elem str _TOKEN_OPCODES
-is_identifier str = isLower (head str)
-  && all (\c -> isLower c || isNumber c) (tail str)
-is_chr        str = length str == 3
-  && head str == '\''
-  && last str == '\''
-  && is_identifier [str!!1]
-is_register   str = length str == 1
-  && elem (str!!0) "ABCDEFGH"
-is_comma      str = str == ","
-is_number     str = (isNumber . head $ str) || (head str == '-') && all isNumber (tail str)
-is_section    str = head str == '.' && is_identifier (tail str)
-is_tag        str = last str == ':' && is_identifier (init str)
-is_type       str = elem str _TOKEN_TYPES
-
--- | Values
 
 is_reg :: Int -> Bool
 is_reg   n = n > 32767 && n < 32775
 is_value :: Int -> Bool
 is_value n = n >= 0 && n < 32776
-
 
 to_int :: [Char] -> Int
 to_int n = read n :: Int
@@ -121,45 +63,6 @@ to_int n = read n :: Int
 throw_err err line = error $ "Error: " ++ err ++ " at line " ++ (show line)
 
 throw_invalid_token t = throw_err ("Invalid token: " ++ (show . t_token $ t)) (t_line t)
-
-
--- |
--- | First pass - Tokenizer
--- |
-
-strip_comments :: String -> String
-strip_comments [] = []
-strip_comments (c:cs)
-  | c == _TOKEN_COMMENT = []
-  | otherwise           = c : strip_comments cs
-
-tokenize :: [[TokenInfo]] -> [String] -> Int -> [TokenInfo]
-tokenize acc [] _ = concat . reverse $ acc
-tokenize acc (line:lines) line_n
-  -- | Line is empty or with only comments
-  | null line || null line' = tokenize acc lines (line_n+1)
-  -- | Line has tokens
-  | otherwise = tokenize ((tokens++[TokenInfo line_n T_Newline]):acc) lines (line_n+1)
-        -- | Strip comments
-  where line'     = strip_comments line
-        -- | Split by space
-        -- | -> Separate by comma
-        -- | -> Map to tokens
-        -- | -> TokenInfo
-        -- | -> Concat into a stream of tokens
-        tokens    = concat . map (map (TokenInfo line_n . to_token) . sep_comma) $ words line'
-        sep_comma = S.split (S.dropBlanks $ S.oneOf ",")
-        to_token str
-          | is_section    str = T_Section    (tail str)
-          | is_register   str = T_Register   (head str)
-          | is_opcode     str = T_Opcode     str
-          | is_type       str = T_Type       str
-          | is_tag        str = T_Tag        (init str)
-          | is_number     str = T_Number     (read str :: Int)
-          | is_chr        str = T_Chr (str!!1)
-          | is_comma      str = T_Comma
-          | is_identifier str = T_Identifier str
-          | otherwise         = throw_err ("Invalid token \"" ++ str ++ "\"") line_n
 
 -- |
 -- | Second pass - Sections
@@ -255,7 +158,7 @@ resolve_identifier :: [Const] -> [TokenInfo] -> [Char] -> Int -> Token
 resolve_identifier const' tags name line_n
   | null c_matches && null tag_matches =
     throw_err ("Constant or tag not declared: " ++ name) line_n
-  | null c_matches = T_Tag name
+  | null c_matches = T_Identifier name
   | otherwise = case head c_matches of
     C_Num _ n  -> T_Number n
   where c_matches   = filter (\c -> c_name c == name) const'
@@ -275,6 +178,7 @@ fix_s_code const' tags (t:ts) = t' : fix_s_code const' tags ts
 -- |
 -- | Fourth pass - Tags
 -- |
+
 -- | (Opcode, Number of arguments)
 instr_info :: [Char] -> (Int, [String])
 instr_info op = case op of
@@ -302,20 +206,14 @@ instr_info op = case op of
   "NOOP"   -> (0x15, [])
   _        -> throw_err "Invalid opcode" (-1)
 
-{-
-fourth_pass :: [TokenInfo] -> Int -> Tags
+fourth_pass :: [TokenInfo] -> Int -> [Tag]
+fourth_pass [] _ = []
 fourth_pass (t:ts) ptr = case t_token t of
-  T_Tag    name -> (Tag ptr name) : fourth_pass ts ptr
-  T_Opcode name -> case name of
-    "HALT" -> 0x00 : f_newline ts
-    "SET"  -> 0x01 : f_arg ts 2 (ptr+3)
-  where f_arg ts arg_n ptr
-          | arg_n == 1 = 
-          | otherwise  =
-        f_newline (t:ts) = case t of
-          T_Newline -> fourth_pass ts ptr
+  T_Tag    name -> (Tag ptr name) : fourth_pass ts (traceShow ptr ptr)
+  T_Comma       -> fourth_pass ts ptr
+  T_Newline     -> fourth_pass ts ptr
+  _             -> fourth_pass ts (ptr+1)
 
--}
 -- |
 -- | Fifth pass - Opcode parsing
 -- |
@@ -324,7 +222,7 @@ is_num n = n >= 0 && n < 32768
 
 res_raw t tags = case t_token t of
   T_Number n -> n
-  T_Tag name -> 0 --_jmp_line . head . filter (\tag -> _name tag == name) $ tags
+  T_Identifier name -> _jmp_ptr . head . filter (\tag -> _name tag == name) $ tags
 
 fifth_pass :: [TokenInfo] -> [Tag] -> [Int]
 fifth_pass [] _ = []
@@ -382,25 +280,27 @@ main = do
   
   let s_data = s_tokens . head . filter ((=="data") . s_name) $ sections
   let s_code = s_tokens . head . filter ((=="code") . s_name) $ sections
-  let tags   = check_tags . check_entry_point . filter_tags $ s_code
+  let tags_t = check_tags . check_entry_point . filter_tags $ s_code
 
-  let consts  = check_consts (parse_s_data s_data) tags
-  let s_code' = fix_s_code consts tags s_code
+  let consts  = check_consts (parse_s_data s_data) tags_t
+  let s_code' = fix_s_code consts tags_t s_code
 
   putStrLn "\nThird pass - Section parsing"
   putStrLn "Consts"
   mapM_ print consts
   putStrLn "Tags"
-  mapM_ print tags
+  mapM_ print tags_t
   putStrLn "Fix .code"
   mapM_ putStr $ map (("    "++) . (++"\n") . show) $ s_code'
-  -- mapM_ print s_code
 
   -- | Fourth pass
+  let tags = fourth_pass s_code' 0
+  putStrLn "\nFourth pass - Tags"
+  mapM_ print tags
 
   -- | Fifth pass
   putStrLn "\nFifth pass - Bytecode"
-  let bytecode = fifth_pass s_code' []
+  let bytecode = (fifth_pass s_code' tags) ++ [0, 0]
   print bytecode
 
   BS.writeFile "bin/test.bin" $ P.runPut $ mapM_ P.putWord16le $ map (\n -> fromIntegral n :: Word16) bytecode
