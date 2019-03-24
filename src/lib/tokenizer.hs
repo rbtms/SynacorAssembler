@@ -71,6 +71,7 @@ is_escaped_chr str = length str == 4
 is_register   str = elem str _TOKEN_REGISTERS
 is_comma          = (==[_TOKEN_COMMA])
 is_number     str = (isNumber . head $ str) || (head str == '-') && all isNumber (tail str)
+is_hex        str = length str > 2 && take 2 str == "0x" && all isNumber (drop 2 str)
 is_section    str = elem str _TOKEN_SECTIONS
 is_tag        str = last str == ':' && is_identifier (init str)
 is_type       str = elem str _TOKEN_TYPES
@@ -127,6 +128,8 @@ tokenize' = map (\t@(line_n, str) -> TokenInfo line_n $ to_token t) . concat . m
             | is_type        str = T_Type       str
             | is_tag         str = T_Tag        (init str)
             | is_number      str = T_Number     (read str :: Int)
+            -- | Dangerous? Resolving hex token as number
+            | is_hex         str = T_Number     (read str :: Int)
             | is_chr         str = T_Chr        (str!!1)
             | is_escaped_chr str = T_Chr        (unescape str)
             | is_comma       str = T_Comma

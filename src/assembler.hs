@@ -11,6 +11,11 @@ import Tokenizer
 import ArgumentParser hiding (usage, parse_args, check_args)
 import Debug.Trace
 
+{-
+ -  TODO:
+ -    - Define NUM argument types and HEX data and argument types
+ -}
+
 -- |
 -- | Datatypes
 -- |
@@ -31,9 +36,11 @@ data Tag = Tag { _jmp_ptr :: Int, _name :: [Char] }
 -- | Constants
 -- |
 
+-- | Maximum integer
 _MAX_NUM :: Int
 _MAX_NUM = 32768
 
+-- | Code to be injected at the start in order to jump to main
 _JMP_MAIN :: [TokenInfo]
 _JMP_MAIN = [jmp, ptr, newline]
   where jmp     = TokenInfo 0 (T_Opcode "JMP")
@@ -44,6 +51,7 @@ _JMP_MAIN = [jmp, ptr, newline]
 -- | Boolean checking functions
 -- |
 
+-- | Whether its a valid register
 is_reg :: Int -> Bool
 is_reg   n = n > 32767 && n < 32776
 
@@ -54,6 +62,7 @@ is_reg   n = n > 32767 && n < 32776
 to_int :: [Char] -> Int
 to_int n = read n :: Int
 
+-- | Parse a number
 parse_num :: Int -> Int
 parse_num n = mod n _MAX_NUM
 
@@ -71,6 +80,7 @@ throw_invalid_token t = throw_err ("Invalid token: " ++ (show . t_token $ t)) (t
 -- | Second pass - Sections
 -- |
 
+-- | Check section validity
 check_sections sections
   | not . has_section "data" $ sections = throw_err "Lacking data section" (-1)
   | not . has_section "code" $ sections = throw_err "Lacking code section" (-1)
@@ -78,6 +88,7 @@ check_sections sections
   | otherwise            = sections
   where has_section name sections = any (\s -> s_name s == name) sections
 
+-- | Split source into sections
 split_sections :: [TokenInfo] -> [Section]
 split_sections = filter (not . null . s_name) . map to_section . split_sections'
   where split_sections' = S.split (S.dropBlanks . S.keepDelimsL $ S.whenElt (is_section_token . t_token))
@@ -98,18 +109,28 @@ split_sections = filter (not . null . s_name) . map to_section . split_sections'
 -- | Third pass - Parse sections
 -- |
 
+-- | Filter tag tokens
 filter_tags :: [TokenInfo] -> [TokenInfo]
 filter_tags = filter (is_tag . t_token)
   where is_tag (T_Tag name) = True
         is_tag _            = False
 
+-- | Return a declared section or an empty one if it doesnt exist
+get_section :: [Section] -> [Char] -> Section
+get_section sections name
+  | null . length $ section = Section name []
+  | otherwise               = s_tokens . head $ section
+  where section = filter ((==name) . s_name) $ sections
+
 -- | .data
 
+-- | Get tag name from TokenInfo
 tag_name :: TokenInfo -> [Char]
 tag_name t = case t_token t of
   T_Tag name -> name
   _          -> throw_err "tag_name - Invalid tag in const checking" (t_line t)
 
+-- | Check const validity
 check_consts :: [Const] -> [TokenInfo] -> [Const]
 check_consts [] _ = []
 check_consts (c:consts) tags
@@ -120,12 +141,14 @@ check_consts (c:consts) tags
   | otherwise = c : check_consts consts tags
   where is_tag t c = c_name c == tag_name t
 
+-- | Check whether main exists
 check_entry_point:: [TokenInfo] -> [TokenInfo]
 check_entry_point tags
   | not . any (\t -> tag_name t == "main") $ tags =
     throw_err "check_entry_point - Entry point not defined" (-1)
   | otherwise = tags
 
+-- | Check tags validity
 check_tags :: [TokenInfo] -> [TokenInfo]
 check_tags [] = []
 check_tags (t:tags)
@@ -133,12 +156,13 @@ check_tags (t:tags)
     throw_err "check_tags - Redeclarated tag" (t_line t)
   | otherwise   = t : check_tags tags
 
+-- | Parse data section
 parse_s_data :: [TokenInfo] -> [Const]
 parse_s_data = d_identifier
   where d_identifier []     = []
         d_identifier (t:ts) = case t_token t of
           T_Identifier t_name' -> d_type ts t_name'
-          T_Newline            -> d_identifier (ts)
+          T_Newline            -> d_identifier ts
           _                    -> throw_invalid_token t
         d_type (t:ts) t_name' = case t_token t of
           T_Type t_type' -> d_value ts t_name' t_type'
@@ -157,6 +181,7 @@ parse_s_data = d_identifier
 
 -- | .code
 
+-- | Resolve identifiers
 resolve_identifier :: [Const] -> [TokenInfo] -> [Char] -> Int -> Token
 resolve_identifier const' tags name line_n
   | null c_matches && null tag_matches =
@@ -167,10 +192,11 @@ resolve_identifier const' tags name line_n
   where c_matches   = filter (\c -> c_name c == name) const'
         tag_matches = filter (\t -> tag_name t == name) tags
 
+-- | Replace constants (not tags) on the code section
 fix_s_code :: [Const] -> [TokenInfo] -> [TokenInfo] -> [TokenInfo]
 fix_s_code _      _    [] = []
 fix_s_code const' tags (t:ts) = t' : fix_s_code const' tags ts
-  where resolve_reg r = 32671 + (ord . toLower $ r)
+  where resolve_reg r = 32703 + (ord r)
         t' = TokenInfo (t_line t) $ case t_token t of
           T_Number n        -> T_Number . parse_num $ n
           T_Chr c           -> T_Number . ord $ c
@@ -182,7 +208,7 @@ fix_s_code const' tags (t:ts) = t' : fix_s_code const' tags ts
 -- | Fourth pass - Tags
 -- |
 
--- | (Opcode, Number of arguments)
+-- | (Opcode, Number and type of arguments)
 instr_info :: [Char] -> (Int, [String])
 instr_info op = case op of
   "HALT"   -> (0x00, [])
@@ -201,7 +227,7 @@ instr_info op = case op of
   "OR"     -> (0x0D, ["REG", "VAL", "VAL"])
   "NOT"    -> (0x0E, ["REG", "VAL"])
   "RMEM"   -> (0x0F, ["REG", "VAL"])
-  "WMEM"   -> (0x10, ["VAL", "REG"])
+  "WMEM"   -> (0x10, ["VAL", "VAL"])
   "CALL"   -> (0x11, ["TAG"])
   "RET"    -> (0x12, [])
   "OUT"    -> (0x13, ["VAL"])
@@ -209,6 +235,7 @@ instr_info op = case op of
   "NOOP"   -> (0x15, [])
   _        -> throw_err "Invalid opcode" (-1)
 
+-- | Get tag positions
 fourth_pass :: [TokenInfo] -> Int -> [Tag]
 fourth_pass [] _ = []
 fourth_pass (t:ts) ptr = case t_token t of
@@ -221,10 +248,12 @@ fourth_pass (t:ts) ptr = case t_token t of
 -- | Fifth pass - Opcode parsing
 -- |
 
+-- | Resolve last values
 res_raw t tags = case t_token t of
   T_Number n -> n
   T_Identifier name -> _jmp_ptr . head . filter (\tag -> _name tag == name) $ tags
 
+-- | Convert to bytecode
 fifth_pass :: [TokenInfo] -> [Tag] -> [Int]
 fifth_pass [] _ = []
 fifth_pass (t:ts) tags = case t_token t of
@@ -257,6 +286,7 @@ fifth_pass (t:ts) tags = case t_token t of
             -- | There are arguments not resolved
             else throw_err "Not enough arguments" (t_line t)
 
+-- | Print verbose
 print_v v str
   | v = putStrLn str
   | otherwise = putStr ""
@@ -266,7 +296,6 @@ main = do
   args <- get_args
   let v = _v args
 
-  -- src <- openFile "src/test.txt" ReadMode >>= hGetContents
   src <- openFile (_src_path args) ReadMode >>= hGetContents
   print_v v src
 
@@ -280,7 +309,7 @@ main = do
   
   print_v v "\nSecond pass - Split into sections"
   let sections = split_sections tokens
-  mapM_  ((print_v v) . (\s ->
+  mapM_  (print_v v . (\s ->
        (s_name s ++ " (Line " ++ (show . s_line $ s) ++ ")\n")
     ++ (concatMap (("    "++) . (++"\n") . show) . s_tokens $ s)
     )) sections
@@ -294,7 +323,7 @@ main = do
 
   let consts  = check_consts (parse_s_data s_data) tags_t
   -- | Inject a JMP to the entry point
-  let s_code' = _JMP_MAIN ++ (fix_s_code consts tags_t s_code)
+  let s_code' = _JMP_MAIN ++ fix_s_code consts tags_t s_code
 
   print_v v "Consts"
   mapM_ (print_v v . ("    "++) . show) consts
@@ -311,9 +340,10 @@ main = do
   -- | Fifth pass
   print_v v "\nFifth pass - Bytecode"
 
-  -- | Add HALT opcode at the end to avoid bugs
-  let bytecode = fifth_pass s_code' tags ++ [0]
-  print_v v $ show bytecode
+  let bytecode = fifth_pass s_code' tags
+  -- | Fill resting memory with 0
+  let mem      = bytecode ++ [ 0 | _ <- [0..32000 - length bytecode - 1] ]
+  print_v v $ "Length: " ++ (show . length $ bytecode) ++ "\n" ++ show bytecode
 
-  BS.writeFile (_out_path args) . P.runPut . mapM_ (P.putWord16le . (\n -> fromIntegral n :: Word16)) $ bytecode
+  BS.writeFile (_out_path args) . P.runPut . mapM_ (P.putWord16le . (\n -> fromIntegral n :: Word16)) $ mem
 
