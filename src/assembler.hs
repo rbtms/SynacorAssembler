@@ -118,8 +118,8 @@ filter_tags = filter (is_tag . t_token)
 -- | Return a declared section or an empty one if it doesnt exist
 get_section :: [Section] -> [Char] -> Section
 get_section sections name
-  | null . length $ section = Section name []
-  | otherwise               = s_tokens . head $ section
+  | null section = Section name 0 []
+  | otherwise    = head section
   where section = filter ((==name) . s_name) $ sections
 
 -- | .data
@@ -317,8 +317,8 @@ main = do
   -- | Section parsing
   
   print_v v "\nThird pass - Section parsing"
-  let s_data = s_tokens . head . filter ((=="data") . s_name) $ sections
-  let s_code = s_tokens . head . filter ((=="code") . s_name) $ sections
+  let s_data = s_tokens $ get_section sections "data"
+  let s_code = s_tokens $ get_section sections "code"
   let tags_t = check_tags . check_entry_point . filter_tags $ s_code
 
   let consts  = check_consts (parse_s_data s_data) tags_t
